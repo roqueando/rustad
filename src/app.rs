@@ -1,6 +1,17 @@
 use crate::components;
 use egui::{Color32, Pos2, Rect, Sense, Stroke, Vec2, pos2, vec2};
 
+#[derive(Copy, Clone, Debug, serde::Deserialize, serde::Serialize)]
+struct Terminal {
+    offset: Vec2
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+struct ElectricComponent {
+    rect: Rect,
+    terminals: [Terminal; 2]
+}
+
 #[derive(serde::Deserialize, serde::Serialize)]
 struct Camera {
     pan: Vec2,
@@ -12,6 +23,10 @@ struct Camera {
 pub struct RustadApplication {
     label: String,
     camera: Camera,
+    placing_component: bool,
+    place_start_world: Pos2,
+    place_current_world: Pos2,
+    components: Vec<ElectricComponent>,
 
     #[serde(skip)]
     value: f32,
@@ -23,6 +38,10 @@ impl Default for RustadApplication {
             label: "Rustad".to_owned(),
             value: 2.7,
             camera: Camera { pan: vec2(0.0, 0.0), zoom: 1.0},
+            placing_component: false,
+            place_start_world: Pos2::default(),
+            place_current_world: Pos2::default(),
+            components: vec![]
         }
     }
 }
@@ -41,47 +60,6 @@ impl RustadApplication {
     }
 }
 
-impl eframe::App for RustadApplication {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        // here will be the widgets
-        components::panel::make_panel(ui);
-
-        let rect = ui.available_rect_before_wrap();
-        let response = ui.allocate_rect(rect, Sense::click_and_drag());
-        let painter = ui.painter_at(rect);
-
-        if response.dragged() {
-            self.camera.pan -= response.drag_delta() / self.camera.zoom;
-        }
-
-        let zoom_factor = ui.ctx().input(|i| i.zoom_delta());
-        if (zoom_factor - 1.0).abs() > f32::EPSILON {
-            let cursor = ui.ctx()
-                .input(|i| i.pointer.hover_pos())
-                .unwrap_or(rect.center());
-            self.camera.zoom_at(rect, cursor, zoom_factor);
-        }
-
-        let scroll = ui.ctx().input(|i| i.smooth_scroll_delta);
-        if scroll != Vec2::ZERO {
-            self.camera.pan -= scroll / self.camera.zoom;
-        }
-
-        draw_grid(&painter, rect, &self.camera);
-        /*
-        egui::CentralPanel::default().show_inside(ui, |ui| {
-            draw_custom_infinite_grid(ui, 0.5);
-            /*
-            Plot::new("infinite_grid_plot")
-                .view_aspect(2.0)
-                .show(ui, |_plot_ui| {
-                    //
-                });
-            */
-        });
-        */
-    }
-}
 
 // TODO: move this to a camera module
 impl Camera {
@@ -171,4 +149,96 @@ fn draw_grid(painter: &egui::Painter, vp: Rect, cam: &Camera) {
 }
 
 // end camera module
+
+impl eframe::App for RustadApplication {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // here will be the widgets
+        components::panel::make_panel(ui);
+
+        let rect = ui.available_rect_before_wrap();
+        let response = ui.allocate_rect(rect, Sense::click_and_drag());
+        let painter = ui.painter_at(rect);
+
+
+        if response.dragged() {
+            self.camera.pan -= response.drag_delta() / self.camera.zoom;
+        }
+
+        let zoom_factor = ui.ctx().input(|i| i.zoom_delta());
+        if (zoom_factor - 1.0).abs() > f32::EPSILON {
+            let cursor = ui.ctx()
+                .input(|i| i.pointer.hover_pos())
+                .unwrap_or(rect.center());
+            self.camera.zoom_at(rect, cursor, zoom_factor);
+        }
+
+        let scroll = ui.ctx().input(|i| i.smooth_scroll_delta);
+        if scroll != Vec2::ZERO {
+            self.camera.pan -= scroll / self.camera.zoom;
+        }
+
+
+        // INFO: this is my right click menu
+        response.context_menu(|ui| {
+            // each button is my option
+            if ui.button("add generic component").clicked() {
+                if let Some(mouse) = ui.ctx().input(|i| i.pointer.hover_pos()) {
+                    let world = self.camera.screen_to_world(mouse, rect);
+                    self.placing_component = true;
+                    self.place_start_world = world;
+                    self.place_current_world = world;
+                }
+                ui.close();
+            }
+        });
+
+        // INFO: click to drag and draw component
+        if response.drag_started_by(egui::PointerButton::Primary) {
+            if let Some(mouse) = ui.ctx().input(|i| i.pointer.press_origin()) {
+                self.placing_component = true;
+                let world = self.camera.screen_to_world(mouse, rect);
+                self.place_start_world = world;
+                self.place_current_world = world;
+            }
+        }
+
+        // INFO: checking if is placing a component
+        if self.placing_component && response.dragged_by(egui::PointerButton::Primary) {
+            if let Some(mouse) = ui.ctx().input(|i| i.pointer.hover_pos()) {
+                self.place_current_world = self.camera.screen_to_world(mouse, rect);
+            }
+        }
+
+        if self.placing_component && response.drag_stopped_by(egui::PointerButton::Primary) {
+            let min = pos2(
+                self.place_start_world.x.min(self.place_current_world.x),
+                self.place_start_world.y.min(self.place_current_world.y)
+            );
+
+            let max = pos2(
+                self.place_start_world.x.max(self.place_current_world.x),
+                self.place_start_world.y.max(self.place_current_world.y)
+            );
+
+            let placed = Rect::from_min_max(min, max);
+            if placed.width() > 5.0 && placed.height() >5.0 {
+                let top_left = placed.min;
+                let bottom_right = placed.max;
+
+                self.components.push(ElectricComponent {
+                    rect: placed,
+                    terminals: [
+                        Terminal { offset: vec2(0.0, placed.height() * 0.5) },
+                        Terminal { offset: vec2(placed.width(), placed.height() * 0.5) },
+                    ]
+                })
+            }
+            self.placing_component = false;
+        }
+
+        painter.rect_filled(rect, 0.0, Color32::from_gray(18));
+
+        draw_grid(&painter, rect, &self.camera);
+    }
+}
 
