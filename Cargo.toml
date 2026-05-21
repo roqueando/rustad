@@ -1,0 +1,10 @@
+[package]
+name = "rustad"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eframe = {version = "0.34.2", features = ["glow"]}
+egui = { version = "0.34.2", features = ["serde"] }
+egui_plot = "0.35.0"
+serde = {version = "1.0.228", features = ["derive"]}
