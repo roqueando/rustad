@@ -1,5 +1,5 @@
 use crate::components;
-use egui::{Color32, Pos2, Rect, Sense, Stroke, Vec2, pos2, vec2};
+use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, Vec2, pos2, vec2};
 
 #[derive(Copy, Clone, Debug, serde::Deserialize, serde::Serialize)]
 struct Terminal {
@@ -239,6 +239,48 @@ impl eframe::App for RustadApplication {
         painter.rect_filled(rect, 0.0, Color32::from_gray(18));
 
         draw_grid(&painter, rect, &self.camera);
+
+        for c in &self.components {
+            let min = self.camera.world_to_screen(c.rect.min, rect);
+            let max = self.camera.world_to_screen(c.rect.max, rect);
+            let screen_rect = Rect::from_min_max(min, max);
+
+            painter.rect_filled(screen_rect, CornerRadius::same(4), Color32::from_gray(55));
+            painter.rect_stroke(
+                screen_rect,
+                CornerRadius::same(4),
+                Stroke::new(1.0, Color32::WHITE),
+                egui::StrokeKind::Outside
+            );
+
+            for t in c.terminals {
+                let p_world = pos2(c.rect.min.x + t.offset.x, c.rect.min.y + t.offset.y);
+                let p_screen = self.camera.world_to_screen(p_world, rect);
+                painter.circle_filled(p_screen, 4.0, Color32::YELLOW);
+            }
+        }
+
+        if self.placing_component {
+            let min = pos2(
+                self.place_start_world.x.min(self.place_current_world.x),
+                self.place_start_world.y.min(self.place_current_world.y),
+            );
+            let max = pos2(
+                self.place_start_world.x.max(self.place_current_world.x),
+                self.place_start_world.y.max(self.place_current_world.y),
+            );
+            let preview = Rect::from_min_max(min, max);
+            let min_s = self.camera.world_to_screen(preview.min, rect);
+            let max_s = self.camera.world_to_screen(preview.max, rect);
+            let preview_screen = Rect::from_min_max(min_s, max_s);
+
+            painter.rect_stroke(
+                preview_screen,
+                CornerRadius::same(4),
+                Stroke::new(1.0, Color32::LIGHT_GREEN),
+                egui::StrokeKind::Outside,
+            );
+        }
     }
 }
 
