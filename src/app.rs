@@ -18,14 +18,22 @@ struct Camera {
     zoom: f32, // 1.0 = 1 px/pt no seu mundo
 }
 
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+enum InteractionState {
+    Idle,
+    DraggingCanvas,
+    PlacingComponent {
+        start_world: Pos2,
+        current_world: Pos2
+    }
+}
+
 #[derive(serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 pub struct RustadApplication {
     label: String,
     camera: Camera,
-    placing_component: bool,
-    place_start_world: Pos2,
-    place_current_world: Pos2,
+    interaction: InteractionState,
     components: Vec<ElectricComponent>,
 
     #[serde(skip)]
@@ -38,9 +46,7 @@ impl Default for RustadApplication {
             label: "Rustad".to_owned(),
             value: 2.7,
             camera: Camera { pan: vec2(0.0, 0.0), zoom: 1.0},
-            placing_component: false,
-            place_start_world: Pos2::default(),
-            place_current_world: Pos2::default(),
+            interaction: InteractionState::Idle,
             components: vec![]
         }
     }
@@ -160,10 +166,6 @@ impl eframe::App for RustadApplication {
         let painter = ui.painter_at(rect);
 
 
-        if response.dragged() {
-            self.camera.pan -= response.drag_delta() / self.camera.zoom;
-        }
-
         let zoom_factor = ui.ctx().input(|i| i.zoom_delta());
         if (zoom_factor - 1.0).abs() > f32::EPSILON {
             let cursor = ui.ctx()
@@ -173,9 +175,16 @@ impl eframe::App for RustadApplication {
         }
 
         let scroll = ui.ctx().input(|i| i.smooth_scroll_delta);
+
         if scroll != Vec2::ZERO {
             self.camera.pan -= scroll / self.camera.zoom;
         }
+
+        /*
+        if response.dragged() {
+            self.camera.pan -= response.drag_delta() / self.camera.zoom;
+        }
+        */
 
 
         // INFO: this is my right click menu
@@ -184,59 +193,76 @@ impl eframe::App for RustadApplication {
             if ui.button("add generic component").clicked() {
                 if let Some(mouse) = ui.ctx().input(|i| i.pointer.hover_pos()) {
                     let world = self.camera.screen_to_world(mouse, rect);
-                    self.placing_component = true;
-                    self.place_start_world = world;
-                    self.place_current_world = world;
+                    self.interaction = InteractionState::PlacingComponent {
+                        start_world: world,
+                        current_world: world
+                    };
                 }
                 ui.close();
             }
         });
 
-        // INFO: click to drag and draw component
-        if response.drag_started_by(egui::PointerButton::Primary) {
-            if let Some(mouse) = ui.ctx().input(|i| i.pointer.press_origin()) {
-                self.placing_component = true;
-                let world = self.camera.screen_to_world(mouse, rect);
-                self.place_start_world = world;
-                self.place_current_world = world;
+        match &mut self.interaction {
+            InteractionState::Idle => {
+                if response.drag_started_by(egui::PointerButton::Middle) {
+                    self.interaction = InteractionState::DraggingCanvas;
+                }
+                if response.dragged_by(egui::PointerButton::Middle) {
+                    self.camera.pan -= response.drag_delta() / self.camera.zoom;
+                }
+                if response.drag_stopped_by(egui::PointerButton::Middle) {
+                    self.interaction = InteractionState::Idle;
+                }
+            },
+
+            InteractionState::DraggingCanvas => {
+                if response.dragged_by(egui::PointerButton::Middle) {
+                    self.camera.pan -= response.drag_delta() / self.camera.zoom;
+                }
+                if response.drag_stopped_by(egui::PointerButton::Middle) {
+                    self.interaction = InteractionState::Idle;
+                }
+            },
+            InteractionState::PlacingComponent { start_world, current_world } => {
+                if response.drag_started_by(egui::PointerButton::Primary) {
+                    if let Some(mouse) = ui.ctx().input(|i| i.pointer.press_origin()) {
+                        let world = self.camera.screen_to_world(mouse, rect);
+                        *start_world = world;
+                        *current_world = world;
+                    }
+                }
+                if response.dragged_by(egui::PointerButton::Primary) {
+                    if let Some(mouse) = ui.ctx().input(|i| i.pointer.hover_pos()) {
+                        *current_world = self.camera.screen_to_world(mouse, rect);
+                    }
+                }
+
+                if response.drag_stopped_by(egui::PointerButton::Primary) {
+                    let min = pos2(
+                        start_world.x.min(current_world.x),
+                        start_world.y.min(current_world.y)
+                    );
+
+                    let max = pos2(
+                        start_world.x.max(current_world.x),
+                        start_world.y.max(current_world.y)
+                    );
+
+                    let placed = Rect::from_min_max(min, max);
+
+                    if placed.width() > 5.0 && placed.height() >5.0 {
+                        self.components.push(ElectricComponent {
+                            rect: placed,
+                            terminals: [
+                                Terminal { offset: vec2(0.0, placed.height() * 0.5) },
+                                Terminal { offset: vec2(placed.width(), placed.height() * 0.5) },
+                            ]
+                        })
+                    }
+                    self.interaction = InteractionState::Idle;
+                }
             }
         }
-
-        // INFO: checking if is placing a component
-        if self.placing_component && response.dragged_by(egui::PointerButton::Primary) {
-            if let Some(mouse) = ui.ctx().input(|i| i.pointer.hover_pos()) {
-                self.place_current_world = self.camera.screen_to_world(mouse, rect);
-            }
-        }
-
-        if self.placing_component && response.drag_stopped_by(egui::PointerButton::Primary) {
-            let min = pos2(
-                self.place_start_world.x.min(self.place_current_world.x),
-                self.place_start_world.y.min(self.place_current_world.y)
-            );
-
-            let max = pos2(
-                self.place_start_world.x.max(self.place_current_world.x),
-                self.place_start_world.y.max(self.place_current_world.y)
-            );
-
-            let placed = Rect::from_min_max(min, max);
-            if placed.width() > 5.0 && placed.height() >5.0 {
-                let top_left = placed.min;
-                let bottom_right = placed.max;
-
-                self.components.push(ElectricComponent {
-                    rect: placed,
-                    terminals: [
-                        Terminal { offset: vec2(0.0, placed.height() * 0.5) },
-                        Terminal { offset: vec2(placed.width(), placed.height() * 0.5) },
-                    ]
-                })
-            }
-            self.placing_component = false;
-        }
-
-        painter.rect_filled(rect, 0.0, Color32::from_gray(18));
 
         draw_grid(&painter, rect, &self.camera);
 
@@ -260,15 +286,17 @@ impl eframe::App for RustadApplication {
             }
         }
 
-        if self.placing_component {
+        if let InteractionState::PlacingComponent { start_world, current_world } = &self.interaction {
+            
             let min = pos2(
-                self.place_start_world.x.min(self.place_current_world.x),
-                self.place_start_world.y.min(self.place_current_world.y),
+                start_world.x.min(current_world.x),
+                start_world.y.min(current_world.y),
             );
             let max = pos2(
-                self.place_start_world.x.max(self.place_current_world.x),
-                self.place_start_world.y.max(self.place_current_world.y),
+                start_world.x.max(current_world.x),
+                start_world.y.max(current_world.y),
             );
+
             let preview = Rect::from_min_max(min, max);
             let min_s = self.camera.world_to_screen(preview.min, rect);
             let max_s = self.camera.world_to_screen(preview.max, rect);
